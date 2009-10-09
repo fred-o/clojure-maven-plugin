@@ -6,22 +6,22 @@
  */
 package com.theoryinpractise.clojure;
 
-import org.apache.commons.exec.Executor;
-import org.apache.commons.exec.DefaultExecutor;
+import java.lang.reflect.*;
+import java.net.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.io.*;
+
+import java.util.Map;
 import org.apache.commons.exec.CommandLine;
-import org.apache.commons.exec.ExecuteStreamHandler;
+
+import org.apache.commons.exec.DefaultExecutor;
 import org.apache.commons.exec.ExecuteException;
-
-
+import org.apache.commons.exec.ExecuteStreamHandler;
+import org.apache.commons.exec.Executor;
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
-
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.HashMap;
-import java.util.Map;
 
 public abstract class AbstractClojureCompilerMojo extends AbstractMojo {
     
@@ -31,8 +31,75 @@ public abstract class AbstractClojureCompilerMojo extends AbstractMojo {
      * @parameter
      */
     private List<String> prependClasses;
-    
+
+	/**
+	 * @parameter expression="${fork}" default-value="true"
+	 */
+	private boolean fork;
+
     protected void callClojureWith(
+            File[] sourceDirectory,
+            File outputDirectory,
+            List<String> compileClasspathElements,
+            String mainClass,
+            String[] clojureArgs) throws MojoExecutionException {
+		if (fork) {
+			callClojureForked(sourceDirectory, outputDirectory, compileClasspathElements, mainClass, clojureArgs);
+		} else {
+			callClojureInProcess(sourceDirectory, outputDirectory, compileClasspathElements, mainClass, clojureArgs);
+		}
+	}
+
+	/**
+	 * Convenience method that adds a new classpath element to a list of URLs.
+	 */
+	private void addClasspathElement(File f, List<URL> urls) throws MalformedURLException {
+		URL u = f.toURL();
+		getLog().debug("Adding " + u);
+		urls.add(u);
+	}
+
+	/**
+	 * Like {@link AbstractClojureCompilerMojo#callClojureWith},
+	 * except does not fork a new process.
+	 */
+    protected void callClojureInProcess(
+            File[] sourceDirectory,
+            File outputDirectory,
+            List<String> compileClasspathElements,
+            String mainClass,
+            String[] clojureArgs) throws MojoExecutionException {
+		try {
+			List<URL> urls = new ArrayList<URL>();
+			try {
+				for(File d: sourceDirectory) {
+					addClasspathElement(d, urls);
+				}
+
+				for(String e: compileClasspathElements) {
+					addClasspathElement(new File(e), urls);
+				}
+			} catch (MalformedURLException e) {
+				getLog().error(e);
+			}
+			
+			ClassLoader loader = new URLClassLoader(urls.toArray(new URL[urls.size()]));
+
+			Class<?> cl = loader.loadClass(mainClass);
+			Method m = cl.getMethod("main", new Class<?>[] { clojureArgs.getClass() });
+
+			getLog().info("Executing " + cl.getName() + "#" + m.getName() + " in-process");
+
+			System.setProperty("clojure.compile.path", outputDirectory.getPath());
+
+			m.invoke(null, new Object[] { clojureArgs });
+
+		} catch (Exception e) {
+			getLog().error(e);
+		} 		
+	}
+
+    protected void callClojureForked(
             File[] sourceDirectory,
             File outputDirectory,
             List<String> compileClasspathElements,
